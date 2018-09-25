@@ -1,6 +1,3 @@
-
-# coding: utf-8
-
 import os
 from pathlib import Path
 import IPython.display as ipd
@@ -16,15 +13,24 @@ from datetime import datetime, timedelta
 import tensorflow as tf
 import seaborn as sns
 import subprocess
-import pygame
-import sys
-#get_ipython().run_line_magic('matplotlib', 'inline')
-
-tf.logging.set_verbosity(tf.logging.ERROR)
 
 # NOTES
-NOTES = "28x28"
+CATEGORY = ["no_voice"]
+LABELS = ["yes", "no"]
+CHANNELS = [1, 2, 3, 5, 6, 7, 8]
+NUMS = ''.join([str(x) for x in CHANNELS])
+MONTHS = [9]
+DAYS = [25]
+def curr_time():
+    return datetime.now() - timedelta(hours=7) # offset from UTC to PST
 
+NOTES = "28x28"
+ROOT = os.getcwd() + "/"
+if CATEGORY[0] == "no_voice":
+    RUN_ROOT = ROOT+"NONVOCAL_RUNS_YN_{:02}_{:02}/".format(MONTHS[0], DAYS[0])
+else:
+    RUN_ROOT = ROOT+"VOCAL_RUNS_YN_{:02}_{:02}/".format(MONTHS[0], DAYS[0])
+RUN_ROOT_LOG = RUN_ROOT+"logs/"
 # VARS
 target_label = "Label"
 id_label = "fname"
@@ -67,6 +73,21 @@ else:
     BATCH_SIZE = 64
     VERBOSITY = 1000
     SHUFFLE_SIZE = 256
+paths = {
+    "Training":ROOT+"paths_scaled_combined.csv",
+    "Model": ROOT+"demoModelOutliers",
+    "Logs":RUN_ROOT_LOG+"{}_{}/".format(NUMS, datetime.strftime(curr_time(), "%b%d%Y_%H%M%S"))
+}
+paths["Log"] = paths["Logs"] + "log.txt"
+#  Create variables for the paths
+train_csv = paths["Training"]
+
+# Store the labels to train
+all_labels = LABELS
+labels = ["yes", "no", "stop", "unknown"]
+num_labels = len(labels) - 1
+labels = {x[1]:x[0] for x in enumerate(labels)}
+reverse_lookup = {labels[k]:k for k in labels}
 
 def curr_time():
     return datetime.now() - timedelta(hours=7) # offset from UTC to PST
@@ -92,10 +113,6 @@ if not os.path.isdir(RUN_ROOT_LOG):
 if not os.path.isdir(paths["Logs"]):
     os.mkdir(paths["Logs"])
 
-
-# In[2]:
-
-
 def make_header(s):
     return ("#" * 42) + ("\n{:^42}\n".format(s)) + ("#" * 42)
     
@@ -111,10 +128,6 @@ def print_and_log_header(s):
         log.write(h)
         log.write("\n")
     print(h)
-
-
-# In[3]:
-
 
 def sec_to_str(secs):
     ms = secs - int(secs)
@@ -167,10 +180,6 @@ def remove_voice(df):
 def str_to_l(x):
     return [int(n) for n in x if n <= '9' and n >= '0']
 
-
-# In[4]:
-
-
 count = 0
 def _parse_function(label, *filenames):
     global count
@@ -192,10 +201,6 @@ def _parse_function(label, *filenames):
         else:
             image = image_decoded
     return image, label
-
-
-# In[5]:
-
 
 def model_fn(features, labels, mode):
     input_layer = tf.reshape(features, [-1, TARGET_HEIGHT, TARGET_WIDTH, len(CHANNELS)])
@@ -252,10 +257,6 @@ def model_fn(features, labels, mode):
     return tf.estimator.EstimatorSpec(
         mode=mode, loss=loss, eval_metric_ops=eval_metric_ops)
 
-
-# In[6]:
-
-
 def create_training_input_fn(dataset, batch_size, num_epochs=None):
     def _input_fn(num_epochs=None, shuffle=True):
         ds = dataset.batch(batch_size).repeat(num_epochs)
@@ -271,124 +272,3 @@ def create_predict_input_fn(dataset, batch_size):
         feature_batch, label_batch = ds.make_one_shot_iterator().get_next()
         return feature_batch, label_batch
     return _input_fn
-
-
-# In[7]:
-
-
-with open(paths["Log"], 'w') as log:
-    log.write(make_header("Starting Script\n"))
-
-
-# In[8]:
-
-
-# Create variables for the paths
-
-# Store the labels to train
-all_labels = LABELS
-labels = ["yes", "no", "stop", "unknown"]
-num_labels = len(labels) - 1
-labels = {x[1]:x[0] for x in enumerate(labels)}
-reverse_lookup = {labels[k]:k for k in labels}
-
-# In[9]:
-
-# Make the training data
-print_and_log_header("MAKING TRAINING DATA")
-demo_data = pd.read_csv("./demo.csv")
-
-demo_data = demo_data.drop(columns=['Path4'])
-
-# In[10]:
-
-# Filter the training data
-demo_data = select_categories(demo_data, CATEGORY)
-# demo_data = select_channels(demo_data, CHANNELS)
-demo_data = select_labels(demo_data, LABELS)
-demo_data = select_months(demo_data, MONTHS)
-demo_data = select_days(demo_data, DAYS)
-# train_data = remove_voice(train_data)
-demo_data = demo_data.sample(frac=1).reset_index(drop=True)
-tdcopy = pd.DataFrame(demo_data)
-demo_data["Label"] = demo_data["Label"].map(labels)
-
-if VERBOSE:
-    print_and_log_header("TRAIN DATA")
-    print_and_log(demo_data.describe())
-    print_and_log(demo_data.head(10))
-
-# # Separate Labels
-demo_labels = demo_data.pop(target_label)
-img_paths = ["Path{}".format(channel) for channel in CHANNELS]
-demo_data = demo_data[img_paths]
-
-# Vectors of filenames.
-t_f, v_f, s_f = [], [], []
-for i in range(1, 1 + len(CHANNELS)):
-    channel = CHANNELS[i-1]
-    l = "Path{}".format(channel)
-    t_f.append(tf.constant(demo_data[l]))
-
-# `labels[i]` is the label for the image in `filenames[i]
-# Vectors of labels
-demo_labels = tf.constant(demo_labels)
-
-# Make datasets from filenames and labels
-demo_data = tf.data.Dataset.from_tensor_slices((demo_labels, *t_f))
-demo_data = timer(lambda: demo_data.map(_parse_function))
-
-classifier = tf.estimator.Estimator(model_fn=model_fn, model_dir=paths["Model"])
-
-
-# Create the input functions.
-demo_eval_input_fn = create_predict_input_fn(demo_data, DEFAULT_BS)
-
-# Create predicitons and remove 10% lowest confidence rows
-results = [x for x in classifier.predict(input_fn=demo_eval_input_fn)]
-classes = [x["classes"] for x in results]
-probs = [x["probabilities"] for x in results]
-# probs = pd.Series(probs)
-# probs = probs.apply(lambda x: max(x))
-# tdf = pd.DataFrame({"Prediction":classes, "Probability":probs})
-# num_items = tdf.shape[0]
-# for k in tdcopy:
-#     tdf[k] = tdcopy[k]
-# outliers = tdf.nsmallest(int(num_items * OUTLIER_PERCENTAGE), "Probability")
-# keepers = tdf.append(outliers, ignore_index=True).drop_duplicates(["Day", "Month", "Label", "SequenceNumber"], keep=False).reset_index(drop=True)
-# outliers = outliers.reset_index(drop=True)
-# keepers["Label"] = keepers["Label"].apply(lambda x: reverse_lookup[x])
-# outliers["Label"] = outliers["Label"].apply(lambda x: reverse_lookup[x])
-# if DISPLAY:
-#     print_and_log_header("OUTLIERS")
-#     display.display(outliers.describe())
-#     print_and_log_header("KEEPERS")
-#     display.display(keepers.describe())
-
-pygame.init()
- 
-pygame.display.set_caption('CerebroVoice')
-size = [1280, 960]
-screen = pygame.display.set_mode(size)
- 
-clock = pygame.time.Clock()
- 
-basicfont = pygame.font.SysFont(None, 600)
-print_this = LABELS[classes[0]]
-
-text = basicfont.render(print_this, True, (255, 0, 0), (255, 255, 255))
-textrect = text.get_rect()
-textrect.centerx = screen.get_rect().centerx
-textrect.centery = screen.get_rect().centery
- 
-screen.fill((255, 255, 255))
-screen.blit(text, textrect)
- 
-pygame.display.update()
-while True:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            pygame.quit()
-            sys.exit()
-    pygame.display.flip()
-
