@@ -1,3 +1,0 @@
-python3 MakeSubvocSpectrograms.py;
-python3 GenerateCSV.py;
-python3 demoPredictG.py;
